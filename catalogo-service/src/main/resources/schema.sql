@@ -19,7 +19,7 @@ CREATE INDEX IF NOT EXISTS idx_producto_comercio ON producto(comercio_id);
 
 CREATE TABLE IF NOT EXISTS stock_reserva (
     id BIGSERIAL PRIMARY KEY,
-    reserva_id VARCHAR(255) UNIQUE NOT NULL,
+    reserva_id VARCHAR(255) NOT NULL,
     producto_id BIGINT NOT NULL,
     cantidad INTEGER NOT NULL,
     estado VARCHAR(20) NOT NULL,

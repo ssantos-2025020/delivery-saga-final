@@ -8,10 +8,10 @@ import com.delivery.common.dto.StockReservaRequest;
 import com.delivery.common.dto.StockReservaResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,7 +31,7 @@ public class CatalogoService {
         log.info("Iniciando reserva de stock con reservaId: {}", request.getReservaId());
         
         // Validar reservaId único
-        if (stockReservaRepository.findByReservaId(request.getReservaId()).isPresent()) {
+        if (stockReservaRepository.existsByReservaId(request.getReservaId())) {
             log.warn("ReservaId {} ya existe", request.getReservaId());
             return StockReservaResponse.builder()
                     .exito(false)
@@ -39,9 +39,11 @@ public class CatalogoService {
                     .build();
         }
         
-        // Obtener IDs de productos
+        // Obtener IDs de productos sin duplicados
         List<Long> productoIds = request.getItems().stream()
                 .map(StockReservaRequest.StockItemRequest::getProductoId)
+                .distinct()
+                .sorted()
                 .collect(Collectors.toList());
         
         // Bloqueo pesimista ordenado por ID para evitar deadlocks
@@ -58,28 +60,42 @@ public class CatalogoService {
         Map<Long, Producto> productoMap = productos.stream()
                 .collect(Collectors.toMap(Producto::getId, p -> p));
         
+        // Agrupar cantidades por producto si vinieran repetidos
+        Map<Long, Integer> cantidadesSolicitadas = request.getItems().stream()
+                .collect(Collectors.groupingBy(
+                        StockReservaRequest.StockItemRequest::getProductoId,
+                        Collectors.summingInt(StockReservaRequest.StockItemRequest::getCantidad)
+                ));
+        
+        // Verificar suficiencia de stock para todos los productos antes de alterar nada
+        for (Map.Entry<Long, Integer> entry : cantidadesSolicitadas.entrySet()) {
+            Producto producto = productoMap.get(entry.getKey());
+            if (producto.getStock() < entry.getValue()) {
+                log.warn("Stock insuficiente para producto {}: disponible={}, solicitado={}", 
+                        producto.getNombre(), producto.getStock(), entry.getValue());
+                return StockReservaResponse.builder()
+                        .exito(false)
+                        .mensaje(String.format("Stock insuficiente para %s. Disponible: %d, Solicitado: %d",
+                                producto.getNombre(), producto.getStock(), entry.getValue()))
+                        .build();
+            }
+        }
+        
         List<StockReserva> reservas = new ArrayList<>();
         List<StockReservaResponse.ProductoReservado> productosReservados = new ArrayList<>();
         
-        for (StockReservaRequest.StockItemRequest item : request.getItems()) {
-            Producto producto = productoMap.get(item.getProductoId());
-            
-            if (producto.getStock() < item.getCantidad()) {
-                log.warn("Stock insuficiente para producto {}: disponible={}, solicitado={}", 
-                        producto.getNombre(), producto.getStock(), item.getCantidad());
-                throw new RuntimeException(
-                        String.format("Stock insuficiente para %s. Disponible: %d, Solicitado: %d",
-                                producto.getNombre(), producto.getStock(), item.getCantidad()));
-            }
+        for (Map.Entry<Long, Integer> entry : cantidadesSolicitadas.entrySet()) {
+            Producto producto = productoMap.get(entry.getKey());
+            int cantidad = entry.getValue();
             
             // Descontar stock
-            producto.setStock(producto.getStock() - item.getCantidad());
+            producto.setStock(producto.getStock() - cantidad);
             
             // Guardar reserva
             StockReserva reserva = StockReserva.builder()
                     .reservaId(request.getReservaId())
                     .producto(producto)
-                    .cantidad(item.getCantidad())
+                    .cantidad(cantidad)
                     .estado(StockReserva.EstadoReserva.RESERVADA)
                     .fechaExpiracion(LocalDateTime.now().plusMinutes(5))
                     .build();
@@ -91,7 +107,7 @@ public class CatalogoService {
                     .productoId(producto.getId())
                     .nombre(producto.getNombre())
                     .precio(producto.getPrecio())
-                    .cantidad(item.getCantidad())
+                    .cantidad(cantidad)
                     .build());
         }
         
@@ -110,7 +126,7 @@ public class CatalogoService {
     public void liberarStock(String reservaId) {
         log.info("Liberando stock para reservaId: {}", reservaId);
         
-        List<StockReserva> reservas = stockReservaRepository.findByReservaIdIn(List.of(reservaId));
+        List<StockReserva> reservas = stockReservaRepository.findByReservaId(reservaId);
         
         if (reservas.isEmpty()) {
             log.warn("No se encontró reserva con reservaId: {}", reservaId);
@@ -147,7 +163,7 @@ public class CatalogoService {
     public void confirmarReserva(String reservaId) {
         log.info("Confirmando reserva: {}", reservaId);
         
-        List<StockReserva> reservas = stockReservaRepository.findByReservaIdIn(List.of(reservaId));
+        List<StockReserva> reservas = stockReservaRepository.findByReservaId(reservaId);
         
         for (StockReserva reserva : reservas) {
             if (reserva.getEstado() == StockReserva.EstadoReserva.RESERVADA) {
@@ -157,5 +173,28 @@ public class CatalogoService {
         }
         
         log.info("Reserva confirmada: {}", reservaId);
+    }
+    
+    @Scheduled(fixedRate = 60000)
+    @Transactional
+    public void liberarReservasExpiradas() {
+        LocalDateTime now = LocalDateTime.now();
+        List<StockReserva> expiradas = stockReservaRepository.findReservasExpiradas(now);
+        if (!expiradas.isEmpty()) {
+            log.info("Liberando {} reservas expiradas", expiradas.size());
+            for (StockReserva reserva : expiradas) {
+                try {
+                    Producto producto = productoRepository.findByIdWithLock(reserva.getProducto().getId())
+                            .orElse(null);
+                    if (producto != null) {
+                        producto.setStock(producto.getStock() + reserva.getCantidad());
+                    }
+                    reserva.setEstado(StockReserva.EstadoReserva.LIBERADA);
+                    stockReservaRepository.save(reserva);
+                } catch (Exception e) {
+                    log.error("Error al liberar reserva expirada con id {}", reserva.getId(), e);
+                }
+            }
+        }
     }
 }

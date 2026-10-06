@@ -36,7 +36,7 @@ public class AuthService {
         
         usuario = usuarioRepository.save(usuario);
         
-        String token = tokenProvider.generateToken(usuario.getId(), usuario.getEmail(), usuario.getRol());
+        String token = tokenProvider.generateToken(usuario.getId(), usuario.getEmail(), usuario.getNombre(), usuario.getRol());
         
         return AuthResponse.builder()
                 .token(token)
@@ -59,7 +59,7 @@ public class AuthService {
             throw new RuntimeException("Credenciales inválidas");
         }
         
-        String token = tokenProvider.generateToken(usuario.getId(), usuario.getEmail(), usuario.getRol());
+        String token = tokenProvider.generateToken(usuario.getId(), usuario.getEmail(), usuario.getNombre(), usuario.getRol());
         
         return AuthResponse.builder()
                 .token(token)

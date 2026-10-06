@@ -2,6 +2,7 @@ package com.delivery.pedidos.service;
 
 import com.delivery.common.dto.StockReservaRequest;
 import com.delivery.common.dto.StockReservaResponse;
+import com.delivery.common.enums.EstadoPedido;
 import com.delivery.pedidos.client.CatalogoClient;
 import com.delivery.pedidos.model.DetallePedido;
 import com.delivery.pedidos.model.Pedido;
@@ -34,7 +35,7 @@ public class PedidosService {
     private final CatalogoClient catalogoClient;
     private final MeterRegistry meterRegistry;
     
-    @Value("${internal.api-key}")
+    @Value("${internal.api-key:internal-api-key-secret}")
     private String internalApiKey;
     
     private static final BigDecimal COSTO_DELIVERY = new BigDecimal("20.00");
@@ -57,25 +58,27 @@ public class PedidosService {
             
             StockReservaResponse response = catalogoClient.reservarStock(internalApiKey, request);
             
-            if (!response.isExito()) {
-                log.error("Fallo al reservar stock: {}", response.getMensaje());
-                throw new RuntimeException("No se pudo reservar stock: " + response.getMensaje());
+            if (response == null || !response.isExito()) {
+                String errorMsg = (response != null && response.getMensaje() != null) ?
+                        response.getMensaje() : "Fallo desconocido al reservar stock";
+                log.error("Fallo al reservar stock: {}", errorMsg);
+                throw new RuntimeException("No se pudo reservar stock: " + errorMsg);
             }
             
-            // Paso 2: Calcular total y guardar pedido
+            // Paso 2: Calcular total y guardar pedido inicial
             BigDecimal total = calcularTotal(response.getProductos());
             
             Pedido pedido = Pedido.builder()
                     .clienteId(clienteId)
                     .clienteNombre(clienteNombre)
-                    .estado(com.delivery.common.enums.EstadoPedido.PENDIENTE)
+                    .estado(EstadoPedido.PENDIENTE)
                     .reservaId(reservaId)
                     .total(total)
                     .build();
             
             pedido = pedidoRepository.save(pedido);
             
-            // Paso 3: Guardar detalles
+            // Paso 3: Guardar detalles asociados al pedido
             List<DetallePedido> detalles = new ArrayList<>();
             for (StockReservaResponse.ProductoReservado pr : response.getProductos()) {
                 DetallePedido detalle = DetallePedido.builder()
@@ -89,21 +92,25 @@ public class PedidosService {
                 detalles.add(detalle);
             }
             
-            detallePedidoRepository.saveAll(detalles);
+            detalles = detallePedidoRepository.saveAll(detalles);
+            pedido.setDetalles(detalles);
             
-            // Paso 4: Confirmar reserva
+            // Paso 4: Confirmar reserva en catálogo y avanzar estado de pedido
             catalogoClient.confirmarReserva(internalApiKey, reservaId);
+            
+            pedido.setEstado(EstadoPedido.CONFIRMADO);
+            pedido = pedidoRepository.save(pedido);
             
             sample.stop(Timer.builder("pedido.creacion")
                     .description("Tiempo de creación de pedido")
                     .register(meterRegistry));
             
-            log.info("Pedido creado exitosamente: {}", pedido.getId());
+            log.info("Pedido creado y confirmado exitosamente: {}", pedido.getId());
             return pedido;
             
         } catch (Exception e) {
-            log.error("Error al crear pedido, iniciando compensación", e);
-            // Compensación: liberar stock
+            log.error("Error al crear pedido, iniciando compensación para reservaId {}", reservaId, e);
+            // Compensación Saga: liberar stock
             liberarStockCompensacion(reservaId);
             throw new RuntimeException("Error al crear pedido: " + e.getMessage(), e);
         }
@@ -119,11 +126,11 @@ public class PedidosService {
             throw new RuntimeException("No tiene permisos para cancelar este pedido");
         }
         
-        if (pedido.getEstado() != com.delivery.common.enums.EstadoPedido.PENDIENTE) {
-            throw new RuntimeException("Solo se pueden cancelar pedidos en estado PENDIENTE");
+        if (pedido.getEstado() != EstadoPedido.PENDIENTE && pedido.getEstado() != EstadoPedido.CONFIRMADO) {
+            throw new RuntimeException("Solo se pueden cancelar pedidos en estado PENDIENTE o CONFIRMADO");
         }
         
-        pedido.setEstado(com.delivery.common.enums.EstadoPedido.CANCELADO);
+        pedido.setEstado(EstadoPedido.CANCELADO);
         pedidoRepository.save(pedido);
         
         // Liberar stock
@@ -139,7 +146,7 @@ public class PedidosService {
             log.info("Stock liberado para reservaId: {}", reservaId);
         } catch (Exception e) {
             log.error("Error al liberar stock para reservaId: {}", reservaId, e);
-            // No relanzar la excepción - la compensación fallida se maneja por reconciliación
+            // Compensación fallida temporalmente: será recuperada por la tarea de reconciliación
         }
     }
     
@@ -148,20 +155,19 @@ public class PedidosService {
     public void reconciliarReservas() {
         log.info("Iniciando reconciliación de reservas");
         
-        // Buscar pedidos en estado PENDIENTE con fecha_pedido > 5 minutos
+        // Buscar pedidos que quedaron en PENDIENTE por fallo no compensado tras 5 minutos
         LocalDateTime fechaLimite = LocalDateTime.now().minusMinutes(5);
         List<Pedido> pedidosPendientes = pedidoRepository
-                .findByEstadoAndFechaPedidoBefore(
-                        com.delivery.common.enums.EstadoPedido.PENDIENTE, fechaLimite);
+                .findByEstadoAndFechaPedidoBefore(EstadoPedido.PENDIENTE, fechaLimite);
         
         for (Pedido pedido : pedidosPendientes) {
-            log.warn("Reserva huérfana detectada: reservaId={}", pedido.getReservaId());
+            log.warn("Reserva huérfana detectada: pedidoId={}, reservaId={}", pedido.getId(), pedido.getReservaId());
             liberarStockCompensacion(pedido.getReservaId());
-            pedido.setEstado(com.delivery.common.enums.EstadoPedido.CANCELADO);
+            pedido.setEstado(EstadoPedido.CANCELADO);
             pedidoRepository.save(pedido);
         }
         
-        log.info("Reconciliación completada. Reservas liberadas: {}", pedidosPendientes.size());
+        log.info("Reconciliación completada. Reservas huérfanas procesadas: {}", pedidosPendientes.size());
     }
     
     private Pedido fallbackReservarStock(Long clienteId, String clienteNombre, List<ItemPedido> items, Exception e) {
@@ -179,6 +185,9 @@ public class PedidosService {
     }
     
     private BigDecimal calcularTotal(List<StockReservaResponse.ProductoReservado> productos) {
+        if (productos == null || productos.isEmpty()) {
+            return COSTO_DELIVERY;
+        }
         BigDecimal subtotal = productos.stream()
                 .map(pr -> pr.getPrecio().multiply(BigDecimal.valueOf(pr.getCantidad())))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);

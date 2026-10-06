@@ -1,6 +1,5 @@
 package com.delivery.pedidos.controller;
 
-import com.delivery.common.enums.EstadoPedido;
 import com.delivery.pedidos.dto.PedidoRequest;
 import com.delivery.pedidos.dto.PedidoResponse;
 import com.delivery.pedidos.model.Pedido;
@@ -9,8 +8,10 @@ import com.delivery.pedidos.service.PedidosService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -41,6 +42,7 @@ public class PedidosController {
     }
     
     @GetMapping("/mis-pedidos")
+    @Transactional(readOnly = true)
     public ResponseEntity<List<PedidoResponse>> obtenerMisPedidos(
             @RequestHeader(value = "X-User-Id", required = false) Long userId) {
         
@@ -53,6 +55,7 @@ public class PedidosController {
     }
     
     @GetMapping("/{id}")
+    @Transactional(readOnly = true)
     public ResponseEntity<PedidoResponse> obtenerPedido(
             @PathVariable Long id,
             @RequestHeader(value = "X-User-Id", required = false) Long userId) {
@@ -85,15 +88,17 @@ public class PedidosController {
     }
     
     private PedidoResponse mapToResponse(Pedido pedido) {
-        List<PedidoResponse.ItemPedidoResponse> items = pedido.getDetalles().stream()
-                .map(d -> PedidoResponse.ItemPedidoResponse.builder()
-                        .productoId(d.getProductoId())
-                        .productoNombre(d.getProductoNombre())
-                        .cantidad(d.getCantidad())
-                        .precioUnitario(d.getPrecioUnitario())
-                        .subtotal(d.getSubtotal())
-                        .build())
-                .collect(Collectors.toList());
+        List<PedidoResponse.ItemPedidoResponse> items = pedido.getDetalles() == null ?
+                Collections.emptyList() :
+                pedido.getDetalles().stream()
+                        .map(d -> PedidoResponse.ItemPedidoResponse.builder()
+                                .productoId(d.getProductoId())
+                                .productoNombre(d.getProductoNombre())
+                                .cantidad(d.getCantidad())
+                                .precioUnitario(d.getPrecioUnitario())
+                                .subtotal(d.getSubtotal())
+                                .build())
+                        .collect(Collectors.toList());
         
         return PedidoResponse.builder()
                 .id(pedido.getId())
