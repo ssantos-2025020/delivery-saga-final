@@ -5,7 +5,9 @@ spring:
   application:
     name: catalogo-service
   datasource:
-    url: jdbc:postgresql://postgres:admin@postgres:5432/catalogo_db
+    url: jdbc:postgresql://postgres:5432/catalogo_db
+    username: postgres
+    password: admin
   jpa:
     hibernate:
       ddl-auto: update
