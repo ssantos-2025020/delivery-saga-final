@@ -4,6 +4,7 @@ import com.delivery.catalogo.service.CatalogoService;
 import com.delivery.common.dto.StockReservaRequest;
 import com.delivery.common.dto.StockReservaResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,12 +15,18 @@ public class CatalogoController {
     
     private final CatalogoService catalogoService;
     
+    @Value("${internal.api-key:internal-api-key-secret}")
+    private String internalApiKey;
+    
+    private boolean isAuthorized(String apiKey) {
+        return apiKey != null && apiKey.equals(internalApiKey);
+    }
+    
     @PostMapping("/reservar")
     public ResponseEntity<StockReservaResponse> reservarStock(
-            @RequestHeader("X-Internal-API-Key") String apiKey,
+            @RequestHeader(value = "X-Internal-API-Key", required = false) String apiKey,
             @RequestBody StockReservaRequest request) {
-        // Validar API key
-        if (!apiKey.equals(System.getenv().getOrDefault("INTERNAL_API_KEY", "internal-api-key-secret"))) {
+        if (!isAuthorized(apiKey)) {
             return ResponseEntity.status(403).build();
         }
         
@@ -29,9 +36,9 @@ public class CatalogoController {
     
     @PostMapping("/liberar")
     public ResponseEntity<Void> liberarStock(
-            @RequestHeader("X-Internal-API-Key") String apiKey,
+            @RequestHeader(value = "X-Internal-API-Key", required = false) String apiKey,
             @RequestParam String reservaId) {
-        if (!apiKey.equals(System.getenv().getOrDefault("INTERNAL_API_KEY", "internal-api-key-secret"))) {
+        if (!isAuthorized(apiKey)) {
             return ResponseEntity.status(403).build();
         }
         
@@ -41,9 +48,9 @@ public class CatalogoController {
     
     @PostMapping("/confirmar")
     public ResponseEntity<Void> confirmarReserva(
-            @RequestHeader("X-Internal-API-Key") String apiKey,
+            @RequestHeader(value = "X-Internal-API-Key", required = false) String apiKey,
             @RequestParam String reservaId) {
-        if (!apiKey.equals(System.getenv().getOrDefault("INTERNAL_API_KEY", "internal-api-key-secret"))) {
+        if (!isAuthorized(apiKey)) {
             return ResponseEntity.status(403).build();
         }
         

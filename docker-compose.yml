@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: admin
-      POSTGRES_DB: delivery
+      POSTGRES_DB: postgres
     ports:
       - "5432:5432"
     volumes:
@@ -22,7 +22,9 @@ services:
       - delivery-network
 
   auth-service:
-    build: ./auth-service
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
     container_name: auth-service
     environment:
       JWT_SECRET: production-secret-minimum-32-characters
@@ -35,7 +37,9 @@ services:
       - delivery-network
 
   catalogo-service:
-    build: ./catalogo-service
+    build:
+      context: .
+      dockerfile: catalogo-service/Dockerfile
     container_name: catalogo-service
     environment:
       INTERNAL_API_KEY: internal-api-key-secret
@@ -48,7 +52,9 @@ services:
       - delivery-network
 
   pedidos-service:
-    build: ./pedidos-service
+    build:
+      context: .
+      dockerfile: pedidos-service/Dockerfile
     container_name: pedidos-service
     environment:
       JWT_SECRET: production-secret-minimum-32-characters
@@ -62,8 +68,12 @@ services:
       - delivery-network
 
   api-gateway:
-    build: ./api-gateway
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
     container_name: api-gateway
+    environment:
+      JWT_SECRET: production-secret-minimum-32-characters
     depends_on:
       - auth-service
       - catalogo-service

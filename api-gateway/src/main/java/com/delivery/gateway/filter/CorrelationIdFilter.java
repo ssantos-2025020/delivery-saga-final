@@ -25,21 +25,22 @@ public class CorrelationIdFilter extends AbstractGatewayFilterFactory<Correlatio
         return (exchange, chain) -> {
             String correlationId = exchange.getRequest().getHeaders().getFirst(CORRELATION_ID_HEADER);
             
-            if (correlationId == null || correlationId.isEmpty()) {
+            if (correlationId == null || correlationId.trim().isEmpty()) {
                 correlationId = UUID.randomUUID().toString();
             }
             
-            MDC.put("correlationId", correlationId);
+            final String finalCorrelationId = correlationId;
+            MDC.put("correlationId", finalCorrelationId);
+            
+            // Adjuntar correlation ID a la cabecera de la respuesta HTTP
+            exchange.getResponse().getHeaders().set(CORRELATION_ID_HEADER, finalCorrelationId);
             
             ServerHttpRequest modifiedRequest = exchange.getRequest().mutate()
-                    .header(CORRELATION_ID_HEADER, correlationId)
+                    .header(CORRELATION_ID_HEADER, finalCorrelationId)
                     .build();
             
-            try {
-                return chain.filter(exchange.mutate().request(modifiedRequest).build());
-            } finally {
-                MDC.remove("correlationId");
-            }
+            return chain.filter(exchange.mutate().request(modifiedRequest).build())
+                    .doFinally(signalType -> MDC.remove("correlationId"));
         };
     }
     

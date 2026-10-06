@@ -12,14 +12,17 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/v1/comercios")
 @RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class PublicCatalogoController {
     
     private final ComercioRepository comercioRepository;
@@ -70,9 +73,10 @@ public class PublicCatalogoController {
     }
     
     private ComercioResponse mapToResponse(Comercio comercio) {
-        List<ProductoResponse> productos = comercio.getProductos().stream()
-                .map(this::mapProductoToResponse)
-                .collect(Collectors.toList());
+        List<ProductoResponse> productos = comercio.getProductos() == null ? Collections.emptyList() :
+                comercio.getProductos().stream()
+                        .map(this::mapProductoToResponse)
+                        .collect(Collectors.toList());
         
         return ComercioResponse.builder()
                 .id(comercio.getId())
@@ -89,7 +93,7 @@ public class PublicCatalogoController {
                 .nombre(producto.getNombre())
                 .precio(producto.getPrecio())
                 .stock(producto.getStock())
-                .comercioId(producto.getComercio().getId())
+                .comercioId(producto.getComercio() != null ? producto.getComercio().getId() : null)
                 .build();
     }
 }

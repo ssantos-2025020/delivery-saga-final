@@ -15,8 +15,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
-import java.security.Key;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 @Component
 public class JwtFilter extends AbstractGatewayFilterFactory<JwtFilter.Config> {
@@ -32,52 +34,63 @@ public class JwtFilter extends AbstractGatewayFilterFactory<JwtFilter.Config> {
     public GatewayFilter apply(Config config) {
         return (exchange, chain) -> {
             String path = exchange.getRequest().getPath().getValue();
+            String method = exchange.getRequest().getMethod().name();
             
-            // Skip auth for /api/v1/auth/**
-            if (path.contains("/api/v1/auth/")) {
+            // Endpoints públicos: registro, login, consulta GET de catálogo y health checks
+            if (path.startsWith("/api/v1/auth/") ||
+                (path.startsWith("/api/v1/comercios") && "GET".equalsIgnoreCase(method)) ||
+                path.startsWith("/actuator/")) {
                 return chain.filter(exchange);
             }
             
             String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
             
             if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                return unauthorized(exchange);
+                return unauthorized(exchange, path, "Token de autorización requerido");
             }
             
             String token = authHeader.substring(7);
             
             try {
-                Key key = Keys.hmacShaKeyFor(jwtSecret.getBytes());
-                Claims claims = Jwts.parserBuilder()
-                        .setSigningKey(key)
+                SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+                Claims claims = Jwts.parser()
+                        .verifyWith(key)
                         .build()
-                        .parseClaimsJws(token)
-                        .getBody();
+                        .parseSignedClaims(token)
+                        .getPayload();
                 
                 String userId = claims.getSubject();
                 String email = claims.get("email", String.class);
                 String rol = claims.get("rol", String.class);
+                String nombre = claims.get("nombre", String.class);
                 
-                // Add user info to headers
-                ServerHttpRequest modifiedRequest = exchange.getRequest().mutate()
+                // Propagar información de usuario a servicios downstream
+                ServerHttpRequest.Builder builder = exchange.getRequest().mutate()
                         .header("X-User-Id", userId)
-                        .header("X-User-Email", email)
-                        .header("X-User-Rol", rol)
-                        .build();
+                        .header("X-User-Email", email != null ? email : "")
+                        .header("X-User-Rol", rol != null ? rol : "");
                 
-                return chain.filter(exchange.mutate().request(modifiedRequest).build());
+                if (nombre != null && !nombre.isBlank()) {
+                    builder.header("X-User-Name", nombre);
+                }
+                
+                return chain.filter(exchange.mutate().request(builder.build()).build());
                 
             } catch (Exception e) {
-                return unauthorized(exchange);
+                return unauthorized(exchange, path, "Token JWT inválido o expirado");
             }
         };
     }
     
-    private Mono<Void> unauthorized(ServerWebExchange exchange) {
+    private Mono<Void> unauthorized(ServerWebExchange exchange, String path, String message) {
         exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
         exchange.getResponse().getHeaders().setContentType(MediaType.APPLICATION_JSON);
         
-        String body = "{\"error\":\"Unauthorized\"}";
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        String body = String.format(
+                "{\"timestamp\":\"%s\",\"status\":401,\"error\":\"Unauthorized\",\"message\":\"%s\",\"path\":\"%s\"}",
+                timestamp, message, path
+        );
         DataBuffer buffer = exchange.getResponse().bufferFactory().wrap(body.getBytes(StandardCharsets.UTF_8));
         
         return exchange.getResponse().writeWith(Mono.just(buffer));

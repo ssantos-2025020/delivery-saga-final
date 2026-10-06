@@ -8,6 +8,9 @@ spring:
     url: jdbc:postgresql://postgres:5432/catalogo_db
     username: postgres
     password: admin
+  sql:
+    init:
+      mode: always
   jpa:
     hibernate:
       ddl-auto: update

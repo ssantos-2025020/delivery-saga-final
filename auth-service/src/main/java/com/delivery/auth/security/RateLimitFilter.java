@@ -4,11 +4,15 @@ import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.Bucket4j;
 import io.github.bucket4j.Refill;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +21,8 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -30,27 +36,35 @@ public class RateLimitFilter implements Filter {
     private static final Logger logger = LoggerFactory.getLogger(RateLimitFilter.class);
     
     @Value("${app.rate-limit.login.max-attempts:5}")
-    private int loginMaxAttempts;
+    private int loginMaxAttempts = 5;
     
     @Value("${app.rate-limit.login.window-seconds:60}")
-    private int loginWindowSeconds;
+    private int loginWindowSeconds = 60;
     
     @Value("${app.rate-limit.general.max-requests:100}")
-    private int generalMaxRequests;
+    private int generalMaxRequests = 100;
     
     @Value("${app.rate-limit.general.window-seconds:60}")
-    private int generalWindowSeconds;
+    private int generalWindowSeconds = 60;
     
     private final Map<String, Bucket> loginBuckets = new ConcurrentHashMap<>();
     private final Map<String, Bucket> generalBuckets = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private ScheduledExecutorService scheduler;
     
-    public RateLimitFilter() {
+    @PostConstruct
+    public void init() {
+        scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(this::cleanupExpiredBuckets, 1, 1, TimeUnit.MINUTES);
     }
     
+    @PreDestroy
+    public void destroy() {
+        if (scheduler != null && !scheduler.isShutdown()) {
+            scheduler.shutdown();
+        }
+    }
+    
     private void cleanupExpiredBuckets() {
-        long now = System.currentTimeMillis();
         loginBuckets.entrySet().removeIf(entry -> entry.getValue().getAvailableTokens() >= loginMaxAttempts);
         generalBuckets.entrySet().removeIf(entry -> entry.getValue().getAvailableTokens() >= generalMaxRequests);
     }
@@ -72,6 +86,7 @@ public class RateLimitFilter implements Filter {
             throws IOException, ServletException {
         
         HttpServletRequest httpRequest = (HttpServletRequest) request;
+        HttpServletResponse httpResponse = (HttpServletResponse) response;
         String path = httpRequest.getRequestURI();
         String identifier = getClientIdentifier(httpRequest);
         
@@ -86,16 +101,30 @@ public class RateLimitFilter implements Filter {
             chain.doFilter(request, response);
         } else {
             logger.warn("Rate limit excedido para {} en {}", identifier, path);
-            response.setStatus(429);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Demasiadas solicitudes. Intente más tarde.\"}");
-            response.setHeader("Retry-After", "60");
+            httpResponse.setStatus(429);
+            httpResponse.setContentType("application/json");
+            httpResponse.setHeader("Retry-After", String.valueOf(loginWindowSeconds));
+            
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+            String body = String.format(
+                    "{\"timestamp\":\"%s\",\"status\":429,\"error\":\"Too Many Requests\",\"message\":\"Demasiadas solicitudes. Intente más tarde.\",\"path\":\"%s\"}",
+                    timestamp, path
+            );
+            httpResponse.getWriter().write(body);
         }
     }
     
     private String getClientIdentifier(HttpServletRequest request) {
+        String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
+            return xForwardedFor.split(",")[0].trim();
+        }
+        String xRealIp = request.getHeader("X-Real-IP");
+        if (xRealIp != null && !xRealIp.isBlank()) {
+            return xRealIp.trim();
+        }
         String email = request.getParameter("email");
-        if (email != null && !email.isEmpty()) {
+        if (email != null && !email.isBlank()) {
             return "email:" + email;
         }
         return request.getRemoteAddr();
