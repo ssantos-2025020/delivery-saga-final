@@ -1,0 +1,70 @@
+name: Auto PR to Develop
+
+on:
+  schedule:
+    # Ejecutar cada 30 minutos: :00, :30
+    - cron: '0,30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if PR already exists
+        id: check-pr
+        run: |
+          # Verificar si ya existe un PR abierto de ssantos-2025020 a develop
+          EXISTING_PR=$(gh pr list --base develop --head ssantos-2025020 --state open --json number --jq '.[0].number' || echo "")
+          
+          if [ -n "$EXISTING_PR" ]; then
+            echo "PR ya existe: #$EXISTING_PR"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No existe PR abierto"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create PR if not exists
+        if: steps.check-pr.outputs.exists == 'false'
+        run: |
+          # Obtener fecha actual en hora local (UTC-6 para Guatemala)
+          CURRENT_HOUR=$(date -u +"%H")
+          CURRENT_MIN=$(date -u +"%M")
+          
+          # Ajustar a hora local (UTC-6)
+          LOCAL_HOUR=$((CURRENT_HOUR - 6))
+          if [ $LOCAL_HOUR -lt 0 ]; then
+            LOCAL_HOUR=$((LOCAL_HOUR + 24))
+          fi
+          
+          echo "Hora local: $LOCAL_HOUR:$CURRENT_MIN"
+          
+          # Verificar si es 11:55 (último PR del día)
+          if [ $LOCAL_HOUR -eq 11 ] && [ $CURRENT_MIN -eq 55 ]; then
+            TITLE="Último PR del día - 11:55"
+            BODY="Último PR automático del día generado por GitHub Actions.
+            
+            Hora: 11:55 hora local"
+          else
+            TITLE="Auto PR - $(date -u +"%Y-%m-%d %H:%M")"
+            BODY="PR automático generado por GitHub Actions.
+            
+            Hora: $(date -u +"%Y-%m-%d %H:%M UTC")"
+          fi
+          
+          # Crear PR
+          gh pr create \
+            --base develop \
+            --head ssantos-2025020 \
+            --title "$TITLE" \
+            --body "$BODY" \
+            || echo "No hay cambios para crear PR"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
