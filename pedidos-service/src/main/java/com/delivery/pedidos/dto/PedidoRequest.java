@@ -26,7 +26,12 @@ public class PedidoRequest {
     @AllArgsConstructor
     @Builder
     public static class ItemPedidoRequest {
+        @jakarta.validation.constraints.NotNull(message = "El productoId es requerido")
         private Long productoId;
+        
+        @jakarta.validation.constraints.NotNull(message = "La cantidad es requerida")
+        @jakarta.validation.constraints.Min(value = 1, message = "La cantidad debe ser al menos 1")
+        @jakarta.validation.constraints.Max(value = 100, message = "La cantidad no puede exceder 100")
         private Integer cantidad;
     }
 }
