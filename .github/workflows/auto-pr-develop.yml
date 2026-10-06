@@ -46,6 +46,12 @@ jobs:
           
           echo "Hora local: $LOCAL_HOUR:$CURRENT_MIN"
           
+          # Verificar si es después de las 11:55 (no crear más PRs hoy)
+          if [ $LOCAL_HOUR -gt 11 ] || ([ $LOCAL_HOUR -eq 11 ] && [ $CURRENT_MIN -gt 55 ]); then
+            echo "Ya pasó las 11:55 AM. No se crearán más PRs hoy."
+            exit 0
+          fi
+          
           # Verificar si es 11:55 (último PR del día)
           if [ $LOCAL_HOUR -eq 11 ] && [ $CURRENT_MIN -eq 55 ]; then
             TITLE="Último PR del día - 11:55"
