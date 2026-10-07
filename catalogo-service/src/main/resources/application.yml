@@ -5,36 +5,17 @@ spring:
   application:
     name: catalogo-service
   datasource:
-    url: jdbc:postgresql://postgres:5432/catalogo_db
-    username: postgres
-    password: admin
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/catalogo_db}
+    username: ${DB_USERNAME:delivery}
+    password: ${DB_PASSWORD:admin}
   sql:
     init:
       mode: always
   jpa:
+    defer-datasource-initialization: true
     hibernate:
       ddl-auto: update
     open-in-view: false
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
-        jdbc:
-          batch_size: 50
-          order_inserts: true
-          order_updates: true
-        jakarta:
-          persistence:
-            lock:
-              timeout: 5000
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health
-  endpoint:
-    health:
-      show-details: always
 
 internal:
-  api-key: ${INTERNAL_API_KEY:internal-api-key-secret}
+  api-key: ${INTERNAL_API_KEY:internal-super-key-2024}
