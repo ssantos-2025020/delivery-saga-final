@@ -5,35 +5,18 @@ spring:
   application:
     name: auth-service
   datasource:
-    url: jdbc:postgresql://postgres:5432/auth_db
-    username: postgres
-    password: admin
-  sql:
-    init:
-      mode: always
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/auth_db}
+    username: ${DB_USERNAME:delivery}
+    password: ${DB_PASSWORD:admin}
   jpa:
     hibernate:
       ddl-auto: update
-    open-in-view: false
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health
-  endpoint:
-    health:
-      show-details: always
-
-jwt:
-  secret: ${JWT_SECRET:your-secret-key-minimum-32-characters-for-development}
-  expiration: 86400000
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    show-sql: false
 
 app:
-  rate-limit:
-    login:
-      max-attempts: 5
-      window-seconds: 60
-    general:
-      max-requests: 100
-      window-seconds: 60
+  jwt:
+    secret: ${JWT_SECRET:c2VjcmV0b0xhcmdvU2VncmV0b0hNVlNvbG9IdW1vVXNhZG9TZWd1cm8yMDI0IQ==}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}
