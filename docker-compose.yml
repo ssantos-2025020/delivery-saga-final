@@ -1,90 +1,81 @@
 services:
-  postgres:
+  db:
     image: postgres:15-alpine
-    container_name: delivery-postgres
+    container_name: delivery-db
     environment:
-      POSTGRES_USER: postgres
+      POSTGRES_USER: delivery
       POSTGRES_PASSWORD: admin
-      POSTGRES_DB: postgres
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - db-data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U delivery -d auth_db"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-    networks:
-      - delivery-network
+      retries: 10
 
   auth-service:
     build:
       context: .
       dockerfile: auth-service/Dockerfile
     container_name: auth-service
-    environment:
-      JWT_SECRET: production-secret-minimum-32-characters
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    ports:
-      - "8081:8081"
-    networks:
-      - delivery-network
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/auth_db
+      DB_USERNAME: delivery
+      DB_PASSWORD: admin
+      JWT_SECRET: microservicios-secreto-firma-jwt-super-seguro-2024!!
+      JWT_EXPIRATION_MS: 86400000
 
   catalogo-service:
     build:
       context: .
       dockerfile: catalogo-service/Dockerfile
     container_name: catalogo-service
-    environment:
-      INTERNAL_API_KEY: internal-api-key-secret
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    ports:
-      - "8082:8082"
-    networks:
-      - delivery-network
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/catalogo_db
+      DB_USERNAME: delivery
+      DB_PASSWORD: admin
+      INTERNAL_API_KEY: internal-super-key-2024
 
   pedidos-service:
     build:
       context: .
       dockerfile: pedidos-service/Dockerfile
     container_name: pedidos-service
-    environment:
-      JWT_SECRET: production-secret-minimum-32-characters
-      INTERNAL_API_KEY: internal-api-key-secret
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    ports:
-      - "8083:8083"
-    networks:
-      - delivery-network
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/pedidos_db
+      DB_USERNAME: delivery
+      DB_PASSWORD: admin
+      INTERNAL_API_KEY: internal-super-key-2024
+      CATALOGO_URL: http://catalogo-service:8082
 
   api-gateway:
     build:
       context: .
       dockerfile: api-gateway/Dockerfile
     container_name: api-gateway
-    environment:
-      JWT_SECRET: production-secret-minimum-32-characters
     depends_on:
       - auth-service
       - catalogo-service
       - pedidos-service
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8081
+      CATALOGO_SERVICE_URL: http://catalogo-service:8082
+      PEDIDOS_SERVICE_URL: http://pedidos-service:8083
+      JWT_SECRET: microservicios-secreto-firma-jwt-super-seguro-2024!!
     ports:
       - "8080:8080"
-    networks:
-      - delivery-network
 
 volumes:
-  postgres-data:
-    driver: local
-
-networks:
-  delivery-network:
-    driver: bridge
+  db-data:
