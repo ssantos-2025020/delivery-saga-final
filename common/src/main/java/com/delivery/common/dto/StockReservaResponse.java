@@ -2,13 +2,15 @@ package com.delivery.common.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.util.List;
 
-@Data
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -16,8 +18,9 @@ public class StockReservaResponse {
     private boolean exito;
     private String mensaje;
     private List<ProductoReservado> productos;
-    
-    @Data
+
+    @Getter
+    @Setter
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
