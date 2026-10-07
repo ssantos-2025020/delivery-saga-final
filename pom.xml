@@ -24,6 +24,7 @@
         <module>auth-service</module>
         <module>catalogo-service</module>
         <module>pedidos-service</module>
+        <module>api-gateway</module>
     </modules>
 
     <properties>
