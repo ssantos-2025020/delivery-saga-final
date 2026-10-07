@@ -5,44 +5,38 @@ spring:
   application:
     name: pedidos-service
   datasource:
-    url: jdbc:postgresql://postgres:5432/pedidos_db
-    username: postgres
-    password: admin
-  sql:
-    init:
-      mode: always
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/pedidos_db}
+    username: ${DB_USERNAME:delivery}
+    password: ${DB_PASSWORD:admin}
   jpa:
     hibernate:
       ddl-auto: update
-    open-in-view: false
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health
-  endpoint:
-    health:
-      show-details: always
-
-catalogo-service:
-  url: http://catalogo-service:8082
+    show-sql: false
 
 internal:
-  api-key: ${INTERNAL_API_KEY:internal-api-key-secret}
+  api-key: ${INTERNAL_API_KEY:internal-super-key-2024}
+
+catalogo:
+  url: ${CATALOGO_URL:http://localhost:8082}
 
 resilience4j:
   circuitbreaker:
     instances:
-      catalogoService:
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 30s
-        sliding-window-size: 10
+      catalogoClient:
+        registerHealthIndicator: true
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+        eventConsumerBufferSize: 10
+  timelimiter:
+    instances:
+      catalogoClient:
+        timeoutDuration: 10s
   retry:
     instances:
-      reservarStock:
-        max-attempts: 2
-        wait-duration: 1s
-      liberarStock:
-        max-attempts: 3
-        wait-duration: 1s
+      catalogoClient:
+        maxAttempts: 3
+        waitDuration: 1s
