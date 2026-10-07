@@ -8,21 +8,26 @@ spring:
     gateway:
       routes:
         - id: auth-service
-          uri: http://auth-service:8081
+          uri: ${AUTH_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/v1/auth/**
           filters:
             - name: CorrelationIdFilter
-            - name: JwtFilter
+        - id: auth-service-registro
+          uri: ${AUTH_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/registro
+          filters:
+            - name: CorrelationIdFilter
         - id: catalogo-service
-          uri: http://catalogo-service:8082
+          uri: ${CATALOGO_SERVICE_URL:http://localhost:8082}
           predicates:
             - Path=/api/v1/comercios/**
           filters:
             - name: CorrelationIdFilter
             - name: JwtFilter
         - id: pedidos-service
-          uri: http://pedidos-service:8083
+          uri: ${PEDIDOS_SERVICE_URL:http://localhost:8083}
           predicates:
             - Path=/api/v1/pedidos/**
           filters:
@@ -36,6 +41,7 @@ spring:
               - GET
               - POST
               - PUT
+              - PATCH
               - DELETE
               - OPTIONS
             allowedHeaders: "*"
@@ -49,5 +55,7 @@ management:
     health:
       show-details: always
 
-jwt:
-  secret: ${JWT_SECRET:your-secret-key-minimum-32-characters}
+app:
+  jwt:
+    secret: ${JWT_SECRET:c2VjcmV0b0xhcmdvU2VncmV0b0hNVlNvbG9IdW1vVXNhZG9TZWd1cm8yMDI0IQ==}
+    expiration-ms: 86400000
