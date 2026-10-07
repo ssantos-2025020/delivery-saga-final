@@ -1,5 +1,5 @@
 import http from 'k6/http';
-import { check, sleep } from 'k6';
+import { check } from 'k6';
 import { Rate } from 'k6/metrics';
 
 const errorRate = new Rate('errors');
@@ -10,28 +10,29 @@ export const options = {
     scenarios: {
         concurrent_orders: {
             executor: 'constant-vus',
-            vus: 50,  // 50 concurrent users
+            vus: 50,
             duration: '30s',
             exec: 'createConcurrentOrders',
         },
     },
     thresholds: {
         http_req_duration: ['p(95)<1000'],
-        errors: ['rate<0.5'],  // Allow up to 50% errors (stock exhaustion)
+        errors: ['rate<0.5'],
         http_req_failed: ['rate<0.5'],
     },
 };
 
 export function setup() {
-    // Register test user
     const registerRes = http.post(`${BASE_URL}/api/v1/auth/registro`, JSON.stringify({
         email: 'concurrency@example.com',
         password: 'password123',
-        nombre: 'Concurrency Test'
+        nombre: 'Concurrency Test',
+        direccion: 'Zona 1',
+        telefono: '5555-8888'
     }), {
         headers: { 'Content-Type': 'application/json' },
     });
-    
+
     let token = '';
     if (registerRes.status === 200) {
         token = registerRes.json('token');
@@ -44,27 +45,28 @@ export function setup() {
         });
         token = loginRes.json('token');
     }
-    
-    // Get a product ID
+
     const headers = {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
     };
-    
+
     const comerciosRes = http.get(`${BASE_URL}/api/v1/comercios?page=0&size=1`, { headers });
+    const comercios = comerciosRes.json();
     let productoId = 1;
-    
-    if (comerciosRes.status === 200 && comerciosRes.json('content').length > 0) {
-        const comercioId = comerciosRes.json('content')[0].id;
+
+    if (comerciosRes.status === 200 && comercios.length > 0) {
+        const comercioId = comercios[0].id;
         const productosRes = http.get(
             `${BASE_URL}/api/v1/comercios/${comercioId}/productos?page=0&size=1`,
             { headers }
         );
-        if (productosRes.status === 200 && productosRes.json('content').length > 0) {
-            productoId = productosRes.json('content')[0].id;
+        const productos = productosRes.json();
+        if (productosRes.status === 200 && productos.length > 0) {
+            productoId = productos[0].id;
         }
     }
-    
+
     return { token, productoId };
 }
 
@@ -73,11 +75,11 @@ export function createConcurrentOrders(data) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${data.token}`,
     };
-    
+
     const orderRes = http.post(
         `${BASE_URL}/api/v1/pedidos`,
         JSON.stringify({
-            items: [
+            productos: [
                 {
                     productoId: data.productoId,
                     cantidad: 1
@@ -85,13 +87,10 @@ export function createConcurrentOrders(data) {
             ]
         }),
         {
-            headers: {
-                ...headers,
-                'Idempotency-Key': `concurrency-${__VU}-${__ITER}`,
-            },
+            headers,
         }
     );
-    
+
     check(orderRes, {
         'order created or rejected': (r) => r.status === 200 || r.status === 409,
         'no server errors': (r) => r.status !== 500,

@@ -13,9 +13,7 @@ CLIENTE_PASS="Cliente123*"
 echo " INICIANDO PRUEBAS UNITARIAS (DELIVERY)"
 
 
-
 # 1. REGISTRO Y AUTENTICACIÓN
-
 
 echo -e "\n[1] Registrando usuario CLIENTE..."
 curl -s -X POST "$BASE_URL/auth/register" \
@@ -48,7 +46,6 @@ echo " Token Admin Obtenido: ${ADMIN_TOKEN:0:20}..."
 
 # 2. CREACIÓN DE COMERCIO Y PRODUCTOS (Rol ADMIN)
 
-
 echo -e "\n[3] Registrando Comercio..."
 COMERCIO_RESP=$(curl -s -X POST "$BASE_URL/comercios" \
   -H "Content-Type: application/json" \
@@ -80,7 +77,6 @@ PRODUCTO_ID=$(echo $PRODUCTO_RESP | jq -r '.id // 1')
 
 # 3. CREACIÓN DE PEDIDO (Rol CLIENTE)
 
-
 echo -e "\n[5] Autenticando usuario CLIENTE..."
 CLIENTE_LOGIN_RESP=$(curl -s -X POST "$BASE_URL/auth/login" \
   -H "Content-Type: application/json" \
@@ -109,7 +105,6 @@ echo $PEDIDO_RESP | jq .
 
 # 4. PRUEBA DE CONTROL DE ACCESO (403 Forbidden)
 
-
 echo -e "\n[7] Intentando crear un comercio con Rol CLIENTE (Debe fallar con 403 Forbidden)..."
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/comercios" \
   -H "Content-Type: application/json" \
@@ -129,7 +124,6 @@ fi
 
 
 # 5. PRUEBA DE ESTRÉS Y CONCURRENCIA
-
 
 echo -e "\n"
 echo " --> EJECUTANDO PRUEBA DE ESTRÉS EN CATÁLOGO DE COMERCIOS"
