@@ -1,20 +1,22 @@
 package com.delivery.catalogo.dto;
 
+import com.delivery.common.enums.CategoriaComercio;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-import java.util.List;
-
-@Data
+@Getter
+@Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
 public class ComercioResponse {
+
     private Long id;
     private String nombre;
-    private String categoria;
+    private CategoriaComercio categoria;
+    private String direccion;
     private Boolean abierto;
-    private List<ProductoResponse> productos;
 }
