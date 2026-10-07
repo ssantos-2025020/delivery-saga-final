@@ -23,6 +23,7 @@
         <module>common</module>
         <module>auth-service</module>
         <module>catalogo-service</module>
+        <module>pedidos-service</module>
     </modules>
 
     <properties>
