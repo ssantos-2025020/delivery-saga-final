@@ -11,13 +11,11 @@ import java.util.List;
 
 @Repository
 public interface StockReservaRepository extends JpaRepository<StockReserva, Long> {
-    
+
     List<StockReserva> findByReservaId(String reservaId);
-    
+
     boolean existsByReservaId(String reservaId);
-    
-    List<StockReserva> findByReservaIdIn(List<String> reservaIds);
-    
+
     @Query("SELECT sr FROM StockReserva sr WHERE sr.estado = 'RESERVADA' AND sr.fechaExpiracion < :now")
     List<StockReserva> findReservasExpiradas(@Param("now") LocalDateTime now);
 }
