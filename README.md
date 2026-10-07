@@ -1,191 +1,129 @@
-# FastOrder API - Sistema de Gestión de Pedidos y Delivery
+# Delivery Microservices (Saga)
 
-API REST construida con Spring Boot 3.x, Spring Security 6, Spring Data JPA, PostgreSQL y JWT (JJWT 0.12.x), diseñada para soportar alta concurrencia, control transaccional estricto de inventario y validación mediante el script de pruebas automatizado `test-api3.sh`.
+Sistema de delivery estilo PedidosYa reconstruido como **microservicios** con
+patrón **Saga** (coreografía vía HTTP) para la gestión de stock. Monorepo Maven.
 
----
+## Arquitectura
 
-## 1. Requisitos Previos
-
-- **Java Development Kit (JDK)**: Versión 17 o superior.
-- **Maven**: 3.8+ (o utilizar el wrapper `./mvnw` / `.\mvnw.cmd` incluido).
-- **PostgreSQL**: Versión 15 o 16 (para ejecución local).
-- **Docker y Docker Compose**: (opcional para despliegue en contenedores).
-- **Herramientas de prueba de terminal**:
-  - `curl` (para realizar peticiones HTTP)
-  - `jq` (procesador JSON por línea de comandos)
-  - `apache2-utils` (`ab` - Apache Benchmark, opcional para pruebas de estrés)
-  - Git Bash o WSL (en entornos Windows)
-
----
-
-## 2. Configuración de Base de Datos PostgreSQL Local
-
-Si ejecutas el proyecto localmente sin Docker, inicializa PostgreSQL con los siguientes comandos desde tu cliente `psql`:
-
-```sql
--- 1. Crear la base de datos
-CREATE DATABASE fastorder_db;
-
--- 2. (Opcional) Si necesitas crear o verificar el usuario postgres
-CREATE USER postgres WITH ENCRYPTED PASSWORD 'postgres';
-GRANT ALL PRIVILEGES ON DATABASE fastorder_db TO postgres;
+```
+                    ┌──────────────────────────┐
+  clientes ───────► │  api-gateway    :8080    │
+                    └───────┬───────┬──────────┘
+               JWT (X-User-*)│       │
+              ┌─────────────▼──┐  ┌─▼─────────────┐
+              │ auth-service   │  │ catalogo-     │
+              │     :8081      │  │ service :8082 │
+              │  (usuarios,    │  │ (comercios,   │
+              │   JWT)         │  │  stock +      │
+              └────────────────┘  │  reservas)    │
+                                  └─▲─────────────┘
+                reservar/confirmar/ │ /internal/stock (X-Internal-API-Key)
+                                  ┌─┴─────────────┐
+                                  │ pedidos-      │
+                                  │ service :8083 │
+                                  └───────────────┘
 ```
 
----
+- **API Gateway** (`spring-cloud-gateway`): valida el JWT, inyecta las cabeceras
+  `X-User-Id`, `X-User-Rol`, `X-User-Name` y las propaga a los servicios.
+  Endpoints públicos: `/api/v1/auth/**`, `/registro`, `GET /api/v1/comercios/**`
+  y health.
+- **auth-service**: usuarios, login, registro idempotente (`/register` y
+  `/registro`), emisión de JWT (`app.jwt.secret`).
+- **catalogo-service**: comercios y productos con stock. Expone un contrato
+  interno (`/internal/stock/reservar|confirmar|liberar`) protegido con
+  `X-Internal-API-Key`. Las reservas expiran a los 5 minutos (tarea
+  programada) y se usa bloqueo pesimista.
+- **pedidos-service**: crea pedidos ejecutando la saga (reservar → guardar →
+  confirmar; sobre fallo de guardado o cancelación → liberar). Modelo escalar:
+  sin FKs cruzadas entre bases de datos. Usa Resilience4j
+  (`@CircuitBreaker` + `@Retry`) para el cliente HTTP hacia catálogo.
+- **common**: enums, DTOs y excepciones compartidos.
 
-## 3. Variables de Entorno de Configuración
+Reglas de negocio (idénticas al monolito): total = Σ(precio catálogo × cantidad)
++ Q20.00; cancelación solo en `PENDIENTE` y restaura stock; transiciones
+estrictas `PENDIENTE → EN_PREPARACION → EN_CAMINO → ENTREGADO`; un repartidor se
+auto-asigna en su primera transición.
 
-La aplicación expone todas las propiedades sensibles mediante variables de entorno con valores por defecto para agilizar el desarrollo local:
+## Credenciales de prueba (seed en auth-service)
 
-| Variable | Descripción | Valor por Defecto Local | Valor en Docker |
-| :--- | :--- | :--- | :--- |
-| `DB_HOST` | Host de PostgreSQL | `localhost` | `postgres` |
-| `DB_PORT` | Puerto de PostgreSQL | `5432` | `5432` |
-| `DB_NAME` | Nombre de la BD | `fastorder_db` | `fastorder_db` |
-| `DB_USER` | Usuario de la BD | `postgres` | `postgres` |
-| `DB_PASSWORD` | Contraseña de la BD | `postgres` | `postgres` |
-| `JWT_SECRET` | Clave secreta HMAC-SHA (256+ bits) | `404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970` | (Misma) |
-| `JWT_EXPIRATION_MS` | Tiempo de expiración del token | `86400000` (24 horas) | `86400000` |
+|| Rol        | Email                     | Password        ||
+||------------|---------------------------|-----------------||
+|| ADMIN      | admin@fastorder.com       | Admin123*       ||
+|| REPARTIDOR | repartidor@fastorder.com  | Repartidor123*  ||
+|| CLIENTE    | cliente@fastorder.com     | Cliente123*     ||
 
----
+## Levantar
 
-## 4. Ejecución del Proyecto
-
-### Opción A: Ejecución Local con Maven / Maven Wrapper
+### Opción A: Docker Compose
 
 ```bash
-# Con Maven instalado en el sistema:
-mvn spring-boot:run
-
-# En Windows con Maven Wrapper:
-.\mvnw.cmd spring-boot:run
-
-# En Linux / macOS con Maven Wrapper:
-./mvnw spring-boot:run
+docker compose up --build
 ```
 
-El servidor iniciará en `http://localhost:8080/api/v1`.
+- `db` -> PostgreSQL 15 (role `delivery`/`admin`, bases `auth_db`,
+  `catalogo_db`, `pedidos_db`)
+- `api-gateway` -> `http://localhost:8080` (único puerto expuesto)
 
-### Opción B: Ejecución con Docker Compose
-
-Docker Compose orquesta un contenedor para PostgreSQL 16 y otro contenedor multi-stage para el backend:
+### Opción B: PostgreSQL local + Maven (Windows)
 
 ```bash
-# Construir e iniciar los servicios en segundo plano
-docker compose up --build -d
-
-# Ver los logs del backend en tiempo real
-docker compose logs -f backend
-
-# Detener los contenedores y redes
-docker compose down
-
-# Detener eliminando volúmenes de datos
-docker compose down -v
+./init-db.sh                  # crea rol delivery + 3 bases (o docker compose up -d db)
+mvn -N install && mvn -pl common install -DskipTests
+mvn -pl auth-service spring-boot:run      # :8081
+mvn -pl catalogo-service spring-boot:run  # :8082
+mvn -pl pedidos-service spring-boot:run   # :8083
+mvn -pl api-gateway spring-boot:run       # :8080
 ```
 
----
+O un solo paso con el script PowerShell: `powershell -ExecutionPolicy Bypass -File run-local.ps1`.
 
-## 5. Usuarios y Credenciales de Prueba
+## Endpoints (vía gateway http://localhost:8080)
 
-El componente `DataInitializer` inicializa las credenciales de forma idempotente con hash BCrypt:
+|| Método | Ruta                              | Acceso           ||
+||--------|-----------------------------------|------------------||
+|| POST   | /api/v1/auth/register             | Público          ||
+|| POST   | /api/v1/auth/registro             | Público (alias)  ||
+|| POST   | /api/v1/auth/login                | Público          ||
+|| GET    | /api/v1/comercios                 | Público (`?categoria=`) ||
+|| POST   | /api/v1/comercios                 | ADMIN            ||
+|| GET    | /api/v1/comercios/{id}            | Autenticado      ||
+|| GET    | /api/v1/comercios/{id}/productos  | Autenticado (`?soloDisponibles=`) ||
+|| POST   | /api/v1/comercios/{id}/productos  | ADMIN            ||
+|| POST   | /api/v1/pedidos                   | CLIENTE          ||
+|| GET    | /api/v1/pedidos/mis-pedidos       | CLIENTE          ||
+|| GET    | /api/v1/pedidos/disponibles       | REPARTIDOR/ADMIN ||
+|| PATCH  | /api/v1/pedidos/{id}/estado       | REPARTIDOR/ADMIN ||
+|| PATCH  | /api/v1/pedidos/{id}/cancelar     | CLIENTE/ADMIN    ||
+|| POST   | /api/v1/pedidos/{id}/cancelar     | CLIENTE/ADMIN (alias) ||
 
-| Rol | Email | Contraseña | Descripción |
-| :--- | :--- | :--- | :--- |
-| **ADMIN** | `admin@fastorder.com` | `Admin123*` | Gestión de comercios, productos y supervisión de pedidos |
-| **REPARTIDOR** | `repartidor@fastorder.com` | `Repartidor123*` | Asignación y despacho de pedidos listos |
-| **CLIENTE** | `cliente@fastorder.com` | `Cliente123*` | Creado dinámicamente en el paso [1] de `test-api3.sh` |
+Autenticación: `Authorization: Bearer <token>`. Al crear pedido el body acepta
+`"productos"` o `"items"`.
 
----
+## Tests
 
-## 6. Catálogo de Endpoints y Matriz de Permisos
-
-Prefijo global: `/api/v1`
-
-| Método | Endpoint | Rol Requerido | Código Éxito | Descripción |
-| :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/auth/register` | Público | `201 Created` | Registro de clientes (rol forzado a `CLIENTE`) |
-| `POST` | `/auth/login` | Público | `200 OK` | Autenticación (devuelve `token`, `accessToken`, etc.) |
-| `GET` | `/comercios` | Autenticado (Cualquiera) | `200 OK` | Lista de comercios abiertos (filtro `?categoria=`) |
-| `POST` | `/comercios` | `ADMIN` | `201 Created` | Alta de comercio (devuelve `id` en la raíz) |
-| `GET` | `/comercios/{id}/productos` | Autenticado (Cualquiera) | `200 OK` | Productos disponibles del comercio |
-| `POST` | `/comercios/{id}/productos` | `ADMIN` | `201 Created` | Alta de producto en el comercio (`id` en la raíz) |
-| `POST` | `/pedidos` | `CLIENTE` | `201 Created` | Creación de pedido transaccional con bloqueo de stock |
-| `GET` | `/pedidos/mis-pedidos` | `CLIENTE` | `200 OK` | Historial de pedidos del cliente autenticado |
-| `GET` | `/pedidos/disponibles` | `ADMIN` / `REPARTIDOR` | `200 OK` | Pedidos activos para despacho o entrega |
-| `PATCH` | `/pedidos/{id}/estado` | `ADMIN` / `REPARTIDOR` | `200 OK` | Transición de estado (`EN_PREPARACION`, etc.) |
-| `PATCH` | `/pedidos/{id}/cancelar`| `CLIENTE` / `ADMIN` | `200 OK` | Cancelación de pedido y rollback de stock |
-
----
-
-## 7. Ejemplos de Peticiones con `curl`
-
-### 1. Registro de Cliente
 ```bash
-curl -i -X POST http://localhost:8080/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nombre": "Juan Perez",
-    "direccion": "Avenida Reforma 10-00",
-    "telefono": "55551234",
-    "email": "juan@fastorder.com",
-    "password": "Password123*"
-  }'
+mvn -N install && mvn -pl common install -DskipTests
+mvn -pl auth-service test && mvn -pl catalogo-service test && mvn -pl pedidos-service test
 ```
 
-### 2. Login y Obtención de JWT
+Los tres módulos tienen suites `MockMvc` sobre H2 (perfil `test`) que cubren
+registro/login, autorización por rol, total de pedido, 409 por stock
+insuficiente sin mutación, cancelación con liberación de stock y transiciones
+inválidas. En pedidos el `CatalogoClient` se simula con `@MockBean`.
+
+## Pruebas de aceptación y carga
+
 ```bash
-curl -i -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "admin@fastorder.com",
-    "password": "Admin123*"
-  }'
+./test-api3.sh                              # E2E contra el gateway
+k6 run k6/load-test.js                      # ramp hasta 50 VUs
+k6 run k6/concurrency-test.js               # 50 VUs concurrentes creando pedidos
 ```
 
-### 3. Listado de Comercios Autenticado
-```bash
-curl -i -X GET http://localhost:8080/api/v1/comercios \
-  -H "Authorization: Bearer <TU_TOKEN_JWT>"
-```
+## Configuración
 
----
-
-## 8. Ejecución del Script de Evaluación (`test-api3.sh`)
-
-El script `test-api3.sh` valida la suite de autenticación, autorización 403, creación de recursos y pruebas de concurrencia.
-
-### En Linux / macOS
-```bash
-# Dar permisos de ejecución
-chmod +x test-api3.sh
-
-# Ejecutar el script contra la API en ejecución
-./test-api3.sh
-```
-
-### En Windows (Git Bash / WSL)
-1. Abrir **Git Bash** o **WSL**.
-2. Asegurar terminadores de línea Unix:
-```bash
-dos2unix test-api3.sh || sed -i -e 's/\r$//' test-api3.sh
-chmod +x test-api3.sh
-./test-api3.sh
-```
-
----
-
-## 9. Solución de Problemas Comunes
-
-1. **Error: `Port 8080 is already in use`**:
-   - Hay otro servicio ocupando el puerto 8080. Identifícalo y terminalo:
-     - En Windows (PowerShell): `Get-Process -Id (Get-NetTCPConnection -LocalPort 8080).OwningProcess | Stop-Process -Force`
-     - En Linux: `lsof -ti :8080 | xargs kill -9`
-2. **Error de conexión a PostgreSQL (`Connection refused`)**:
-   - Verifica que el servicio de base de datos esté corriendo en el puerto 5432 y que la base `fastorder_db` haya sido creada.
-3. **Error `command not found: jq` en el script**:
-   - En Debian/Ubuntu: `sudo apt-get install jq`
-   - En macOS: `brew install jq`
-   - En Windows: Descargar el binario `jq.exe` y colocarlo en el PATH o en `C:\Program Files\Git\usr\bin`.
-4. **Error `\r: command not found` al ejecutar `test-api3.sh`**:
-   - El script tiene terminaciones de línea estilo Windows (CRLF). Ejecuta: `sed -i -e 's/\r$//' test-api3.sh`.
+Variables de entorno (todas con defaults en cada `application.yml`):
+`JWT_SECRET`, `JWT_EXPIRATION_MS`, `INTERNAL_API_KEY`, `DB_URL`,
+`DB_USERNAME`, `DB_PASSWORD`, `AUTH_SERVICE_URL`, `CATALOGO_SERVICE_URL`,
+`PEDIDOS_SERVICE_URL`, `CATALOGO_URL`. El secret JWT debe coincidir entre
+**auth-service** y **api-gateway**.

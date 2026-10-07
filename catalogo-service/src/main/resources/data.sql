@@ -1,3 +1,14 @@
+-- ============================================================================
+-- Datos iniciales (idempotentes: ejecutables en cada arranque sin duplicar).
+-- Se ejecutan DESPUES de la DDL de Hibernate (spring.jpa.defer-datasource-initialization).
+-- Sintaxis INSERT ... SELECT ... FROM comercio c WHERE ... AND NOT EXISTS (...)
+-- valida para PostgreSQL y MySQL.
+--
+-- Los usuarios (1 ADMIN, 1 REPARTIDOR, 1 CLIENTE) se crean en runtime por el
+-- auth-service (DataSeeder) usando BCryptPasswordEncoder.
+-- ============================================================================
+
+-- Comercios (categorias RESTAURANTE / SUPERMERCADO / FARMACIA)
 INSERT INTO comercio (nombre, categoria, direccion, abierto)
 SELECT 'Burger Palace', 'RESTAURANTE', 'Av. Reforma 1-23', true
 WHERE NOT EXISTS (SELECT 1 FROM comercio WHERE nombre = 'Burger Palace');
@@ -18,6 +29,7 @@ INSERT INTO comercio (nombre, categoria, direccion, abierto)
 SELECT 'Panaderia Central', 'SUPERMERCADO', 'Centro, 4a Calle 2-10', false
 WHERE NOT EXISTS (SELECT 1 FROM comercio WHERE nombre = 'Panaderia Central');
 
+-- Productos con stock variado (los ids de comercio se resuelven por nombre)
 INSERT INTO producto (nombre, precio, stock, disponible, comercio_id)
 SELECT 'Hamburguesa Clasica', 15.00, 50, true, c.id
 FROM comercio c
@@ -78,4 +90,6 @@ FROM comercio c
 WHERE c.nombre = 'Panaderia Central'
   AND NOT EXISTS (SELECT 1 FROM producto p WHERE p.nombre = 'Baguette' AND p.comercio_id = c.id);
 
+-- Los productos sembrados por SQL dejan la columna version (@Version de Hibernate) en NULL;
+-- la primera modificacion de stock fallaria al incrementar la version. Normalizar a 0.
 UPDATE producto SET version = 0 WHERE version IS NULL;
