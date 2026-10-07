@@ -1,13 +1,24 @@
 package com.delivery.catalogo.service;
 
+import com.delivery.catalogo.dto.ComercioRequest;
+import com.delivery.catalogo.dto.ComercioResponse;
+import com.delivery.catalogo.dto.ProductoRequest;
+import com.delivery.catalogo.dto.ProductoResponse;
+import com.delivery.catalogo.model.Comercio;
 import com.delivery.catalogo.model.Producto;
 import com.delivery.catalogo.model.StockReserva;
+import com.delivery.catalogo.repository.ComercioRepository;
 import com.delivery.catalogo.repository.ProductoRepository;
 import com.delivery.catalogo.repository.StockReservaRepository;
 import com.delivery.common.dto.StockReservaRequest;
 import com.delivery.common.dto.StockReservaResponse;
+import com.delivery.common.enums.CategoriaComercio;
+import com.delivery.common.exception.InvalidStatusException;
+import com.delivery.common.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,58 +31,109 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class CatalogoService {
-    
+
+    private static final Logger logger = LoggerFactory.getLogger(CatalogoService.class);
+
+    private final ComercioRepository comercioRepository;
     private final ProductoRepository productoRepository;
     private final StockReservaRepository stockReservaRepository;
-    
+
+    @Transactional
+    public ComercioResponse crearComercio(ComercioRequest request) {
+        Comercio comercio = comercioRepository.save(Comercio.builder()
+                .nombre(request.getNombre())
+                .categoria(request.getCategoria())
+                .direccion(request.getDireccion())
+                .abierto(!Boolean.FALSE.equals(request.getAbierto()))
+                .build());
+        return toComercioResponse(comercio);
+    }
+
+    @Transactional
+    public ProductoResponse crearProducto(Long comercioId, ProductoRequest request) {
+        Comercio comercio = comercioRepository.findById(comercioId)
+                .orElseThrow(() -> new ResourceNotFoundException("Comercio no encontrado"));
+
+        Producto producto = productoRepository.save(Producto.builder()
+                .nombre(request.getNombre())
+                .precio(request.getPrecio())
+                .stock(request.getStock())
+                .disponible(!Boolean.FALSE.equals(request.getDisponible()))
+                .comercio(comercio)
+                .build());
+        return toProductoResponse(producto);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ComercioResponse> listarComercios(CategoriaFiltro categoria, Pageable pageable) {
+        List<Comercio> comercios = (categoria == null || categoria.valor() == null)
+                ? comercioRepository.findComerciosAbiertos(pageable)
+                : comercioRepository.findByCategoriaAndAbierto(categoria.valor(), pageable);
+        return comercios.stream().map(this::toComercioResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ComercioResponse obtenerComercio(Long id) {
+        Comercio comercio = comercioRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Comercio no encontrado"));
+        return toComercioResponse(comercio);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ProductoResponse> listarProductos(Long comercioId, Boolean soloDisponibles, Pageable pageable) {
+        if (!comercioRepository.existsById(comercioId)) {
+            throw new ResourceNotFoundException("Comercio no encontrado");
+        }
+        List<Producto> productos = Boolean.TRUE.equals(soloDisponibles)
+                ? productoRepository.findByComercioIdDisponibles(comercioId, pageable)
+                : productoRepository.findByComercioId(comercioId, pageable);
+        return productos.stream()
+                .map(this::toProductoResponse)
+                .toList();
+    }
+
     @Transactional
     public StockReservaResponse reservarStock(StockReservaRequest request) {
-        log.info("Iniciando reserva de stock con reservaId: {}", request.getReservaId());
-        
-        // Validar reservaId único
+        logger.info("Iniciando reserva de stock con reservaId: {}", request.getReservaId());
+
         if (stockReservaRepository.existsByReservaId(request.getReservaId())) {
-            log.warn("ReservaId {} ya existe", request.getReservaId());
+            logger.warn("ReservaId {} ya existe", request.getReservaId());
             return StockReservaResponse.builder()
                     .exito(false)
                     .mensaje("ReservaId ya existe")
                     .build();
         }
-        
-        // Obtener IDs de productos sin duplicados
+
         List<Long> productoIds = request.getItems().stream()
                 .map(StockReservaRequest.StockItemRequest::getProductoId)
                 .distinct()
                 .sorted()
-                .collect(Collectors.toList());
-        
-        // Bloqueo pesimista ordenado por ID para evitar deadlocks
+                .toList();
+
         List<Producto> productos = productoRepository.findByIdsWithLock(productoIds);
-        
+
         if (productos.size() != productoIds.size()) {
-            log.warn("Uno o más productos no existen");
+            logger.warn("Uno o mas productos no existen");
             return StockReservaResponse.builder()
                     .exito(false)
-                    .mensaje("Uno o más productos no existen")
+                    .mensaje("Uno o mas productos no existen")
                     .build();
         }
-        
+
         Map<Long, Producto> productoMap = productos.stream()
                 .collect(Collectors.toMap(Producto::getId, p -> p));
-        
-        // Agrupar cantidades por producto si vinieran repetidos
+
         Map<Long, Integer> cantidadesSolicitadas = request.getItems().stream()
                 .collect(Collectors.groupingBy(
                         StockReservaRequest.StockItemRequest::getProductoId,
                         Collectors.summingInt(StockReservaRequest.StockItemRequest::getCantidad)
                 ));
-        
-        // Verificar suficiencia de stock para todos los productos antes de alterar nada
+
         for (Map.Entry<Long, Integer> entry : cantidadesSolicitadas.entrySet()) {
             Producto producto = productoMap.get(entry.getKey());
             if (producto.getStock() < entry.getValue()) {
-                log.warn("Stock insuficiente para producto {}: disponible={}, solicitado={}", 
+                logger.warn("Stock insuficiente para producto {}: disponible={}, solicitado={}",
                         producto.getNombre(), producto.getStock(), entry.getValue());
                 return StockReservaResponse.builder()
                         .exito(false)
@@ -80,18 +142,16 @@ public class CatalogoService {
                         .build();
             }
         }
-        
+
         List<StockReserva> reservas = new ArrayList<>();
         List<StockReservaResponse.ProductoReservado> productosReservados = new ArrayList<>();
-        
+
         for (Map.Entry<Long, Integer> entry : cantidadesSolicitadas.entrySet()) {
             Producto producto = productoMap.get(entry.getKey());
             int cantidad = entry.getValue();
-            
-            // Descontar stock
+
             producto.setStock(producto.getStock() - cantidad);
-            
-            // Guardar reserva
+
             StockReserva reserva = StockReserva.builder()
                     .reservaId(request.getReservaId())
                     .producto(producto)
@@ -99,10 +159,8 @@ public class CatalogoService {
                     .estado(StockReserva.EstadoReserva.RESERVADA)
                     .fechaExpiracion(LocalDateTime.now().plusMinutes(5))
                     .build();
-            
+
             reservas.add(reserva);
-            
-            // Agregar a respuesta
             productosReservados.add(StockReservaResponse.ProductoReservado.builder()
                     .productoId(producto.getId())
                     .nombre(producto.getNombre())
@@ -110,78 +168,67 @@ public class CatalogoService {
                     .cantidad(cantidad)
                     .build());
         }
-        
+
         stockReservaRepository.saveAll(reservas);
-        
-        log.info("Stock reservado exitosamente para reservaId: {}", request.getReservaId());
-        
+
+        logger.info("Stock reservado exitosamente para reservaId: {}", request.getReservaId());
+
         return StockReservaResponse.builder()
                 .exito(true)
                 .mensaje("Stock reservado exitosamente")
                 .productos(productosReservados)
                 .build();
     }
-    
+
     @Transactional
     public void liberarStock(String reservaId) {
-        log.info("Liberando stock para reservaId: {}", reservaId);
-        
+        logger.info("Liberando stock para reservaId: {}", reservaId);
+
         List<StockReserva> reservas = stockReservaRepository.findByReservaId(reservaId);
-        
         if (reservas.isEmpty()) {
-            log.warn("No se encontró reserva con reservaId: {}", reservaId);
+            logger.warn("No se encontro reserva con reservaId: {}", reservaId);
             return;
         }
-        
+
         for (StockReserva reserva : reservas) {
-            // Idempotencia: si ya está liberada, no hacer nada
             if (reserva.getEstado() == StockReserva.EstadoReserva.LIBERADA) {
-                log.info("Reserva {} ya está liberada, no-op", reservaId);
+                logger.info("Reserva {} ya esta liberada, no-op", reservaId);
                 continue;
             }
-            
-            if (reserva.getEstado() == StockReserva.EstadoReserva.RESERVADA) {
-                // Restaurar stock con bloqueo pesimista
-                Producto producto = productoRepository.findByIdWithLock(reserva.getProducto().getId())
-                        .orElseThrow(() -> new RuntimeException("Producto no encontrado"));
-                
-                producto.setStock(producto.getStock() + reserva.getCantidad());
-                
-                // Marcar como liberada
-                reserva.setEstado(StockReserva.EstadoReserva.LIBERADA);
-                stockReservaRepository.save(reserva);
-                
-                log.info("Stock restaurado para producto {}: cantidad {}", 
-                        producto.getNombre(), reserva.getCantidad());
-            }
+            Producto producto = productoRepository.findByIdWithLock(reserva.getProducto().getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Producto no encontrado"));
+            producto.setStock(producto.getStock() + reserva.getCantidad());
+            reserva.setEstado(StockReserva.EstadoReserva.LIBERADA);
+            stockReservaRepository.save(reserva);
+            logger.info("Stock restaurado para producto {}: cantidad {}",
+                    producto.getNombre(), reserva.getCantidad());
         }
-        
-        log.info("Stock liberado exitosamente para reservaId: {}", reservaId);
+
+        logger.info("Stock liberado exitosamente para reservaId: {}", reservaId);
     }
-    
+
     @Transactional
     public void confirmarReserva(String reservaId) {
-        log.info("Confirmando reserva: {}", reservaId);
-        
+        logger.info("Confirmando reserva: {}", reservaId);
+
         List<StockReserva> reservas = stockReservaRepository.findByReservaId(reservaId);
-        
         for (StockReserva reserva : reservas) {
             if (reserva.getEstado() == StockReserva.EstadoReserva.RESERVADA) {
                 reserva.setEstado(StockReserva.EstadoReserva.CONFIRMADA);
                 stockReservaRepository.save(reserva);
             }
         }
-        
-        log.info("Reserva confirmada: {}", reservaId);
+
+        logger.info("Reserva confirmada: {}", reservaId);
     }
-    
+
     @Scheduled(fixedRate = 60000)
     @Transactional
     public void liberarReservasExpiradas() {
         LocalDateTime now = LocalDateTime.now();
         List<StockReserva> expiradas = stockReservaRepository.findReservasExpiradas(now);
         if (!expiradas.isEmpty()) {
-            log.info("Liberando {} reservas expiradas", expiradas.size());
+            logger.info("Liberando {} reservas expiradas", expiradas.size());
             for (StockReserva reserva : expiradas) {
                 try {
                     Producto producto = productoRepository.findByIdWithLock(reserva.getProducto().getId())
@@ -192,9 +239,44 @@ public class CatalogoService {
                     reserva.setEstado(StockReserva.EstadoReserva.LIBERADA);
                     stockReservaRepository.save(reserva);
                 } catch (Exception e) {
-                    log.error("Error al liberar reserva expirada con id {}", reserva.getId(), e);
+                    logger.error("Error al liberar reserva expirada con id {}", reserva.getId(), e);
                 }
             }
         }
+    }
+
+    public record CategoriaFiltro(CategoriaComercio valor) {
+        public static CategoriaFiltro of(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return new CategoriaFiltro(null);
+            }
+            try {
+                return new CategoriaFiltro(CategoriaComercio.valueOf(raw.trim().toUpperCase()));
+            } catch (IllegalArgumentException ex) {
+                throw new InvalidStatusException(
+                        "Categoria invalida: " + raw + ". Valores: RESTAURANTE, SUPERMERCADO, FARMACIA");
+            }
+        }
+    }
+
+    private ComercioResponse toComercioResponse(Comercio comercio) {
+        return ComercioResponse.builder()
+                .id(comercio.getId())
+                .nombre(comercio.getNombre())
+                .categoria(comercio.getCategoria())
+                .direccion(comercio.getDireccion())
+                .abierto(comercio.getAbierto())
+                .build();
+    }
+
+    private ProductoResponse toProductoResponse(Producto producto) {
+        return ProductoResponse.builder()
+                .id(producto.getId())
+                .nombre(producto.getNombre())
+                .precio(producto.getPrecio())
+                .stock(producto.getStock())
+                .disponible(producto.getDisponible())
+                .comercioId(producto.getComercio().getId())
+                .build();
     }
 }
