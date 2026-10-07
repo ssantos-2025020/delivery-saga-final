@@ -1,4 +1,4 @@
-package com.fastorder.exception;
+package com.delivery.common.exception;
 
 public class ResourceNotFoundException extends RuntimeException {
     public ResourceNotFoundException(String message) {
